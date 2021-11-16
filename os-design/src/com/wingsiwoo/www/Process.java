@@ -64,14 +64,14 @@ public class Process {
     private Double weightTurnoverTime;
 
     public static void printProcessList(List<Process> processes) {
-        System.out.println("-----------------------------------------------------");
-        System.out.printf("%7s %10s %10s %10s", "进程名称", "到达时间", "所需CPU时间", "所需内存");
+        System.out.println("------------------------------------------------------------------");
+        System.out.printf("%7s %10s %10s %10s %10s", "进程名称", "到达时间", "所需CPU时间", "所需内存", "进程状态");
         System.out.println();
         processes.forEach(process -> {
-            System.out.printf("%7s %12d %11d %15d", process.getName(), process.getArriveTime(), process.getNeedTime(), process.getNeedSize());
+            System.out.printf("%7s %12d %11d %15d %15s", process.getName(), process.getArriveTime(), process.getNeedTime(), process.getNeedSize(), process.getStatus());
             System.out.println();
         });
-        System.out.println("------------------------------------------------------");
+        System.out.println("-------------------------------------------------------------------");
     }
 
 

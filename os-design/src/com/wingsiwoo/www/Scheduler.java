@@ -3,6 +3,8 @@ package com.wingsiwoo.www;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static com.wingsiwoo.www.StatusConstant.*;
+
 /**
  * @author WingsiWoo
  * @date 2021/11/15
@@ -14,6 +16,21 @@ public class Scheduler {
     private Integer timeCount = 0;
 
     /**
+     * 时间片大小
+     */
+    private final int slice = 5;
+
+    /**
+     * 当前已用的时间片数
+     */
+    private int sliceCount = 0;
+
+    /**
+     * 完成所有作业所需要的时间片数
+     */
+    private int sliceSum;
+
+    /**
      * 内存对象
      */
     private Memory memory;
@@ -21,7 +38,7 @@ public class Scheduler {
     /**
      * 作业数
      */
-    private static final Integer WORK_SIZE = 10;
+    private final Integer WORK_SIZE = 10;
 
     /**
      * 后备作业列表，初始大小为10
@@ -31,7 +48,7 @@ public class Scheduler {
     /**
      * 进入内存的进程数
      */
-    private static final Integer PROCESS_SIZE = 5;
+    private final Integer PROCESS_SIZE = 5;
 
     /**
      * 可工作的进程列表，最大大小为5
@@ -43,11 +60,27 @@ public class Scheduler {
      */
     private Map<String, Zone> allocateMap;
 
+    /**
+     * key-作业对应进程名，value-所需时间片数
+     */
+    private Map<String, Integer> rrProcesses;
+
+    /**
+     * key-被阻塞的线程在processes中的下标，value-阻塞结束的时间
+     */
+    private Map<Integer, Integer> blockMap;
+
+    /**
+     * 最优结束时间
+     */
+    private Integer endTime;
+
     public Scheduler() {
         works = new LinkedList<>();
         processes = new LinkedList<>();
         allocateMap = new HashMap<>();
         memory = new Memory();
+        blockMap = new HashMap<>();
     }
 
     /**
@@ -70,14 +103,18 @@ public class Scheduler {
         // 固定的用例，方便测试
         // init();
 
+        // 初始化每个进程所需的时间片数
+        rrProcesses = initTimeSlices();
+        // 所需的时间片总数
+        sliceSum = rrProcesses.values().stream().mapToInt(value -> value).sum();
+        // 结束时间=所需时间片总数 * 时间片大小
+        endTime = sliceSum * slice;
+
         // 打印后备作业队列状态
         Work.printWorkList(works);
-        while (works.size() > 0) {
-            // 创建进程
-            fcfs();
-            // 调度
-            rr();
-        }
+
+        fcfs();
+        rr();
     }
 
     private void init() {
@@ -160,28 +197,35 @@ public class Scheduler {
         works = works.stream().sorted(Comparator.comparing(Work::getArriveTime)).collect(Collectors.toList());
         List<Work> removeWorks = new LinkedList<>();
         // 保持processes中有5个进程/作业已全部进入
-        for (int i = 0; i < works.size() && processes.size() <= PROCESS_SIZE; i++) {
+        for (int i = 0; i < works.size(); i++) {
             Work work = works.get(i);
-            Process process = new Process();
-            process.setName("p" + work.getName().substring(2));
-            process.setArriveTime(work.getArriveTime());
-            process.setNeedTime(work.getNeedTime());
-            process.setNeedSize(work.getNeedSize());
-            // 为进程分配内存空间
-            Zone zone = MemoryAllocator.bestFit(memory, process.getNeedSize());
-            // 分配内存成功
-            if (zone != null) {
-                System.out.println("成功为进程 " + process.getName() + " 分配 " + process.getNeedSize() + "KB 内存!");
-                allocateMap.put(process.getName(), zone);
+            // 说明长度为5的进程队列中有空位置
+            int unfinish = (int) processes.stream().filter(process -> !FINISHED.equals(process.getStatus())).count();
+            if (unfinish < PROCESS_SIZE) {
+                Process process = new Process();
+                process.setName("p" + work.getName().substring(2));
+                process.setArriveTime(work.getArriveTime());
+                process.setNeedTime(work.getNeedTime());
+                process.setNeedSize(work.getNeedSize());
+                // 为进程分配内存空间
+                Zone zone = MemoryAllocator.bestFit(memory, process.getNeedSize());
+                // 分配内存成功
+                if (zone != null) {
+                    System.out.println("成功为进程 " + process.getName() + " 分配 " + process.getNeedSize() + "KB 内存!");
+                    allocateMap.put(process.getName(), zone);
+                } else {
+                    // 分配内存失败
+                    System.out.println("为进程 " + process.getName() + " 分配 " + process.getNeedSize() + "KB 内存失败!");
+                    // 跳过该进程和作业，之后可以分配内存了再优先调用
+                    continue;
+                }
+                processes.add(process);
+                // 把创建了进程的作业（已进入内存）从后备作业队列中移除
+                removeWorks.add(work);
             } else {
-                // 分配内存失败
-                System.out.println("为进程 " + process.getName() + " 分配 " + process.getNeedSize() + "KB 内存失败!");
-                // 跳过该进程和作业，之后可以分配内存了再优先调用
-                continue;
+                // 无空位，结束循环
+                break;
             }
-            processes.add(process);
-            // 把创建了进程的作业（已进入内存）从后备作业队列中移除
-            removeWorks.add(work);
         }
         works.removeAll(removeWorks);
         // 打印进程状态
@@ -197,20 +241,15 @@ public class Scheduler {
      * 时间片轮转调度算法
      */
     public void rr() {
-        // 时间片大小
-        int slice = 5;
-        Map<String, Integer> rrProcesses = initTimeSlices(processes, slice);
-        // 所需的时间片总数
-        int sliceSum = (int) rrProcesses.values().stream().mapToDouble(Integer::doubleValue).sum();
-        // 已用的时间片总数
-        int sliceCount = 0;
-        // 存储执行完成的进程
-        List<Process> removeProcesses = new LinkedList<>();
-
         while (sliceCount < sliceSum) {
-            for (Process process : processes) {
+            // 过滤掉已经完成的，使用暂存集合，避免ConcurrentModificationException异常
+            List<Process> tempProcesses = processes.stream().filter(process -> !FINISHED.equals(process.getStatus())).collect(Collectors.toList());
+            for (Process process : tempProcesses) {
                 // 进程到达了才能开始运行
-                if (timeCount >= process.getArriveTime()) {
+                if (timeCount >= process.getArriveTime() && !BLOCKING.equals(process.getStatus())) {
+                    if (WAITING.equals(process.getStatus())) {
+                        process.setStatus(RUNNING);
+                    }
                     Integer rrSlice = rrProcesses.get(process.getName());
                     // 剩余可用时间片数>0，执行
                     if (rrSlice > 0) {
@@ -218,7 +257,6 @@ public class Scheduler {
                         rrProcesses.replace(process.getName(), rrSlice - 1);
                         timeCount += slice;
                         sliceCount++;
-                        // printProcessInfo(process);
                         // 说明本次时间片轮转后该进程已经执行完毕
                         if (rrSlice - 1 == 0) {
                             // 无可用时间片数，说明进程已经执行完，调度其他进程
@@ -228,27 +266,23 @@ public class Scheduler {
                             Zone zone = allocateMap.get(process.getName());
                             MemoryAllocator.collection(zone, memory.getZones());
                             allocateMap.remove(process.getName());
-                            // 把该进程从进程队列中移除，并且调新的作业进入内存
-                            removeProcesses.add(process);
+                            // 从后备作业队列中调入最早到达的作业进入内存
+                            fcfs();
                         }
                     }
                 } else {
                     timeCount++;
                 }
+                block();
             }
         }
-        // 把该进程从进程队列中移除
-        processes.removeAll(removeProcesses);
     }
 
     /**
-     * 计算每个进程完成所需的时间片数
-     *
-     * @param processes PCB队列
-     * @param slice     时间片大小
+     * 计算每个作业完成所需的时间片数
      */
-    private Map<String, Integer> initTimeSlices(List<Process> processes, int slice) {
-        return processes.stream().collect(Collectors.toMap(Process::getName, process -> (int) Math.ceil(process.getNeedTime().doubleValue() / slice)));
+    private Map<String, Integer> initTimeSlices() {
+        return works.stream().collect(Collectors.toMap(work -> "p" + work.getName().substring(2), work -> (int) Math.ceil(work.getNeedTime().doubleValue() / slice)));
     }
 
     /**
@@ -266,14 +300,52 @@ public class Scheduler {
         // 带权周转时间=周转时间/服务时间
         process.setWeightTurnoverTime(process.getTurnoverTime().doubleValue() / process.getNeedTime().doubleValue());
         // 进程完成标志
-        process.setStatus(StatusConstant.FINISHED);
+        process.setStatus(FINISHED);
 
         System.out.println("--------------------------------------调度完成进程------------------------------------");
         System.out.printf("%7s %10s %10s %10s %10s %10s", "进程名称", "进程状态", "完成时间", "服务所需时间", "周转时间", "带权周转时间");
         System.out.println();
-        System.out.printf("%7s %16s %9d %11d %15d %16f", process.getName(), "FINISHED", process.getFinishTime(), process.getNeedTime(), process.getTurnoverTime(), process.getWeightTurnoverTime());
+        System.out.printf("%7s %16s %9d %11d %15d %16f", process.getName(), process.getStatus(), process.getFinishTime(), process.getNeedTime(), process.getTurnoverTime(), process.getWeightTurnoverTime());
         System.out.println();
         System.out.println("------------------------------------------------------------------------------------\n");
     }
 
+    /**
+     * 随机阻塞线程
+     */
+    private void block() {
+        Random random = new Random();
+        if (processes.size() > 0) {
+            // 随机生成要被阻塞的进程的下标，有25%的概率会阻塞
+            int index = random.nextInt(processes.size() * 4);
+            if (index < processes.size()) {
+                Process process = processes.get(index);
+                if (RUNNING.equals(process.getStatus())) {
+                    // 随机阻塞的结束时间:timeCount-endTime，需要保证进程能顺利完成
+                    if (endTime > timeCount) {
+                        int time = random.nextInt(endTime - timeCount + 1) + timeCount;
+                        process.setStatus(BLOCKING);
+                        // 放入阻塞表中
+                        blockMap.put(index, time);
+                        System.out.println("--------------随机阻塞进程--------------");
+                        System.out.printf("%6s %6s %8s", "进程名称", "阻塞时间", "阻塞结束时间");
+                        System.out.println();
+                        System.out.printf("%6s %8d %12d", process.getName(), time - timeCount, time);
+                        System.out.println();
+                        System.out.println("--------------------------------------");
+                        Process.printProcessList(processes);
+                    }
+                }
+            }
+        }
+
+        // 恢复阻塞完成的进程
+        List<Integer> indexList = blockMap.entrySet().stream().filter(entry -> timeCount >= entry.getValue()).map(Map.Entry::getKey).collect(Collectors.toList());
+        for (int i = 0; i < indexList.size(); i++) {
+            Integer integer = indexList.get(i);
+            Process process = processes.get(integer);
+            process.setStatus(RUNNING);
+            blockMap.remove(integer);
+        }
+    }
 }

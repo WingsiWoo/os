@@ -8,13 +8,17 @@ public class StatusConstant {
     /**
      * 就绪
      */
-    public static final String WAITING = "W";
+    public static final String WAITING = "WAITING";
     /**
      * 运行
      */
-    public static final String RUNNING = "R";
+    public static final String RUNNING = "RUNNING";
+    /**
+     * 阻塞
+     */
+    public static final String BLOCKING = "BLOCKING";
     /**
      * 完成
      */
-    public static final String FINISHED = "F";
+    public static final String FINISHED = "FINISHED";
 }
